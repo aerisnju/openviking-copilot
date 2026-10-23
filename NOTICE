@@ -1,0 +1,36 @@
+openviking-copilot
+Copyright (C) 2026 the openviking-copilot contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3 of the License. See LICENSE for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+
+--------------------------------------------------------------------------------
+Third-party code
+
+vendor/openviking-memory-plugin-shared/
+
+    Derived from the OpenViking project (https://github.com/volcengine/OpenViking),
+    licensed under AGPL-3.0.
+
+    The exact source commit (`168037c8d99fec270742ffda6014d65382a0f04a`) and a
+    SHA-256 digest for every vendored file are recorded in
+    vendor/openviking-memory-plugin-shared/UPSTREAM-MANIFEST.json.
+    The upstream license text is retained at
+    vendor/openviking-memory-plugin-shared/LICENSE and its provenance note at
+    vendor/openviking-memory-plugin-shared/NOTICE.md.
+
+    Refresh with `npm run vendor:openviking`; do not edit the vendored files by
+    hand, because the manifest digests are verified against them.
+
+--------------------------------------------------------------------------------
+Trademarks
+
+GitHub and GitHub Copilot are trademarks of GitHub, Inc. OpenViking is a project
+of its respective maintainers. This integration is not published by, endorsed
+by, or supported by either project; it is an independent third-party
+integration.

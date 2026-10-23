@@ -1,0 +1,9 @@
+.universal-local-memory/
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+*.log
+.openviking-state/
+.probe-results/

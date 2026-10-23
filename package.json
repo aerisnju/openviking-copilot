@@ -1,0 +1,21 @@
+{
+  "name": "openviking-copilot",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "OpenViking memory integration for the local GitHub Copilot App and CLI",
+  "scripts": {
+    "install:copilot": "node scripts/install.mjs",
+    "uninstall:copilot": "node scripts/uninstall.mjs",
+    "diagnostics:copilot": "node scripts/diagnostics.mjs",
+    "probe:install": "node scripts/install-probes.mjs",
+    "probe:uninstall": "node scripts/uninstall-probes.mjs",
+    "probe:validate": "node scripts/validate-probes.mjs",
+    "vendor:openviking": "node scripts/vendor-openviking.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
