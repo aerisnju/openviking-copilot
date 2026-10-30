@@ -208,7 +208,12 @@ each target by same-directory rename. If either replacement fails, it attempts
 to restore the previous owned targets; an incomplete rollback reports the
 preserved backup paths. Each rename is atomic, but the two-target update is not
 crash-atomic: forced process termination or power loss between renames may leave
-temporary backup/staging paths for manual recovery. `--dry-run` performs
+temporary backup/staging paths. `npm run recover:copilot` inspects those artifacts
+and prints a plan; `--apply` restores a displaced backup, discards unused staging,
+or discards a backup whose replacement already completed. It refuses any state it
+cannot justify from the artifacts (for example staging without this project's
+ownership marker) and never deletes a backup while the installed target is
+unowned. `--dry-run` performs
 version/ownership checks and reports targets without creating directories or
 changing files. The hook is a dedicated ownership-tagged
 `hooks/openviking-memory.json`, so unrelated hook files are not modified or
