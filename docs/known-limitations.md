@@ -80,19 +80,35 @@ the tools are missing. Each state emits its own log event
 (`mcp-server-connected`, `mcp-tools-projected`, `mcp-tools-missing-after-handshake`,
 `mcp-tools-projection-recovered`) so "connected" is never read as "available".
 
-## K-5: installer cannot recover from an interrupted replacement
+## K-5: installer recovery is explicit, not automatic
 
 **What happens.** If the installer is killed between its four target renames,
 install, dry-run, and uninstall all refuse to proceed and preserve the
-staging/backup artifacts for manual recovery. Nothing is lost, but nothing
-self-heals either.
+staging/backup artifacts. The refusal now points at
+`npm run recover:copilot`.
 
-**Why it is not done yet.** Automatic recovery needs a crash-consistent
-transaction log, and recovery must delete or move half-replaced files — a
-destructive action that needs explicit confirmation. It is therefore scheduled
-last, after the non-destructive work. The current behaviour is safe (fail
-closed, preserve evidence). Documented in
-`docs/configuration-security.md`.
+**What recovery does.** `recover-install.mjs` reads the on-disk artifacts,
+groups them by transaction id (one install run stamps both targets with the same
+UUID), and prints a plan. `--apply` executes it. The plan distinguishes the
+reachable crash states:
+
+| Left behind | Plan |
+|---|---|
+| backup only, target gone | restore the backup (then discard any staging) |
+| staging only | discard staging — nothing was applied |
+| backup + target | replacement completed, so discard the backup — but only if the installed extension still carries this project's ownership marker |
+| staging without a valid ownership marker, or an ambiguous mix | report as **not recoverable**; change nothing |
+
+**Why it is not automatic.** Recovery moves or deletes files. Deleting the wrong
+artifact destroys a working installation, so it requires an explicit
+`--apply` and refuses any state it cannot justify from the artifacts themselves.
+A crash during recovery leaves a state a later run can still reason about,
+because restores happen before discards.
+
+**What it does not do.** It does not reconstruct a transaction whose artifacts
+were both lost (nothing left to reason about), and it does not verify that the
+restored extension still matches a particular release — it restores whatever the
+backup contains.
 
 ## K-6: historical replay is not implemented
 

@@ -18,7 +18,8 @@ export async function assertNoInterruptedInstallArtifacts(targets) {
     const interrupted = entries.find((entry) => ownedArtifact.test(entry));
     if (interrupted) {
       throw new Error(
-        `Refusing to modify an interrupted installation artifact: ${resolve(directory, interrupted)}; preserve it for manual recovery`,
+        `Refusing to modify an interrupted installation artifact: ${resolve(directory, interrupted)}; `
+          + "preserve it and run `npm run recover:copilot` to inspect and recover the profile",
       );
     }
   }

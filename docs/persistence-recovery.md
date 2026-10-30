@@ -177,7 +177,6 @@ stateDiagram-v2
 ```
 
 ## 7. Recovery scenarios
-
 ### Extension reload
 
 - Reopen the session partition.

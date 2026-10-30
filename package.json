@@ -8,6 +8,7 @@
   "scripts": {
     "install:copilot": "node scripts/install.mjs",
     "uninstall:copilot": "node scripts/uninstall.mjs",
+    "recover:copilot": "node scripts/recover-install.mjs",
     "diagnostics:copilot": "node scripts/diagnostics.mjs",
     "probe:install": "node scripts/install-probes.mjs",
     "probe:uninstall": "node scripts/uninstall-probes.mjs",

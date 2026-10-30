@@ -102,6 +102,8 @@ npm run install:copilot -- --dry-run --host-smoke-only
 npm run install:copilot -- --host-smoke-only
 npm run install:copilot
 npm run uninstall:copilot
+npm run recover:copilot
+npm run recover:copilot -- --apply
 npm run diagnostics:copilot -- status
 npm run diagnostics:copilot -- summary
 npm run diagnostics:copilot -- gc
@@ -118,10 +120,15 @@ change Copilot settings; it also writes an ownership-tagged `preCompact` hook
 configuration. Installation requires Copilot CLI `1.0.95-3` or newer and
 supports `--dry-run` for a non-mutating version/ownership check. Upgrades stage
 both owned targets and restore the old targets after an in-process replacement
-failure; abrupt termination between target renames is not automatically
-recovered. If an interrupted run leaves a UUID-suffixed owned staging or backup
-artifact, install, dry-run, and uninstall refuse to proceed and preserve it for
-manual recovery; do not delete a backup without inspecting the affected targets.
+failure. Abrupt termination between target renames is not automatic, but it is
+recoverable: if an interrupted run leaves a UUID-suffixed owned staging or
+backup artifact, install, dry-run, and uninstall refuse to proceed and preserve
+it. Run `npm run recover:copilot` to print a plan (restore the backup, discard
+unused staging, or discard a backup whose replacement already completed) and
+`npm run recover:copilot -- --apply` to execute it. Recovery refuses any state it
+cannot justify from the artifacts themselves — notably a staging directory
+without this project's ownership marker — and never deletes a backup while the
+installed target is unowned.
 For a controlled host-only trial, `--host-smoke-only` persists a safety marker
 in the installed extension: memory initialization/capture/recall/commit and
 OpenViking MCP registration are disabled regardless of the user's normal
