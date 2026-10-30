@@ -2,9 +2,36 @@ import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const upstreamCommit = "168037c8d99fec270742ffda6014d65382a0f04a";
+
+/**
+ * Usage:
+ *   node scripts/vendor-openviking.mjs [--commit <sha>] [--from <local clone>] [--force]
+ *
+ * `--from` points at a local OpenViking clone, which is preferred when it
+ * exists because it avoids the network and can check out an arbitrary commit
+ * without a second download. Without `--from`, files are fetched from
+ * raw.githubusercontent.com at the pinned commit.
+ *
+ * `--force` allows refreshing an existing vendor directory. Without it the
+ * script refuses to overwrite, so an accidental run cannot silently change the
+ * dependency under a passing test suite.
+ */
+const DEFAULT_COMMIT = "168037c8d99fec270742ffda6014d65382a0f04a";
+
+function argument(name, fallback = null) {
+  const index = process.argv.indexOf(name);
+  if (index === -1) return fallback;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) throw new Error(`Missing value for ${name}`);
+  return value;
+}
+
+const upstreamCommit = argument("--commit", DEFAULT_COMMIT);
+const localClone = argument("--from", process.env.OPENVIKING_SOURCE_DIR || null);
+const force = process.argv.includes("--force");
 const upstreamBase =
   `https://raw.githubusercontent.com/volcengine/OpenViking/${upstreamCommit}`;
 const destination = resolve(
@@ -49,7 +76,18 @@ function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
 }
 
+function readFromClone(path) {
+  // `git show` reads the blob at the pinned commit, so a working tree that is
+  // dirty or checked out elsewhere cannot change what gets vendored.
+  return execFileSync(
+    "git",
+    ["-C", localClone, "show", `${upstreamCommit}:${path}`],
+    { maxBuffer: 32 * 1024 * 1024 },
+  );
+}
+
 async function download(path) {
+  if (localClone) return readFromClone(path);
   const response = await fetch(`${upstreamBase}/${path}`);
   if (!response.ok) {
     throw new Error(`Failed to download ${path}: HTTP ${response.status}`);
@@ -75,9 +113,10 @@ try {
     if (error.code === "ENOENT") existing = false;
     else throw error;
   }
-  if (existing) {
+  if (existing && !force) {
     throw new Error(
-      `Refusing to overwrite existing vendor directory: ${destination}`,
+      `Refusing to overwrite existing vendor directory: ${destination}. `
+        + "Re-run with --force after reviewing the upstream diff.",
     );
   }
 
@@ -121,7 +160,22 @@ try {
     { flag: "wx" },
   );
   await writeFile(resolve(stage, "NOTICE.md"), notice, { flag: "wx" });
-  await rename(stage, destination);
+
+  // Only after every file landed in staging: a failed download must leave the
+  // existing vendor tree untouched, because the integration imports from it.
+  if (existing) {
+    const previous = `${destination}.previous-${randomUUID()}`;
+    await rename(destination, previous);
+    try {
+      await rename(stage, destination);
+    } catch (error) {
+      await rename(previous, destination);
+      throw error;
+    }
+    await rm(previous, { recursive: true, force: true });
+  } else {
+    await rename(stage, destination);
+  }
   process.stdout.write(
     `${JSON.stringify({
       destination,

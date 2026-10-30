@@ -1,6 +1,6 @@
 # OpenViking shared memory-plugin modules
 
-Source commit: [168037c8d99fec270742ffda6014d65382a0f04a](https://github.com/volcengine/OpenViking/commit/168037c8d99fec270742ffda6014d65382a0f04a)
+Source commit: [14fa24dc59228c94461a9d331b0727bc5af97349](https://github.com/volcengine/OpenViking/commit/14fa24dc59228c94461a9d331b0727bc5af97349)
 
 The vendored source files and copied upstream LICENSE are from OpenViking
 and are licensed under the GNU Affero General Public License v3.0. See

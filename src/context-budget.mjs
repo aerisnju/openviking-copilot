@@ -61,6 +61,15 @@ export function boundRecallContext(text, maxTokens) {
 
   const fixedCost = tokenCost(prefix + TRUNCATION_MARKER + suffix);
   if (Math.ceil(fixedCost) > budget) {
+    // The host's envelope grew (a long orientation sentence now precedes the
+    // content), so a tight budget can no longer fit prefix + marker + suffix.
+    // Fall back to the bare markers plus the truncation marker rather than
+    // dropping the context entirely: the caller still learns that memory
+    // existed and was trimmed, which is what the budget is protecting.
+    const minimal = `${CONTEXT_OPEN}${TRUNCATION_MARKER.trimStart()}\n${CONTEXT_CLOSE}`;
+    if (tokenCost(minimal) <= budget) {
+      return { text: minimal, truncated: true, estimatedTokens: estimateContextTokens(minimal) };
+    }
     return { text: "", truncated: true, estimatedTokens: 0 };
   }
   const bodyBudget = Math.max(0, budget - Math.ceil(fixedCost));

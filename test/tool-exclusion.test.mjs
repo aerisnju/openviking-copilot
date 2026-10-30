@@ -84,6 +84,47 @@ test("excludes by prefix across a whole tool family", () => {
   assert.equal(records[0].payload.parts[0].tool_name, "other_tool");
 });
 
+test("applies captureFilters substitutions to tool arguments and output", () => {
+  const filter = "s|Customer \\d+|Customer [ID]|g";
+  const events = [
+    {
+      id: "t1",
+      type: "tool.execution_start",
+      timestamp: "2026-10-30T00:00:00Z",
+      data: { toolCallId: "c1", toolName: "shell", arguments: { command: "curl -H 'X: Customer 12345'" } },
+    },
+    {
+      id: "t1r",
+      type: "tool.execution_complete",
+      timestamp: "2026-10-30T00:00:01Z",
+      data: { toolCallId: "c1", success: true, result: "output for Customer 12345" },
+    },
+  ];
+  const records = normalizeCopilotEvents(events, SESSION, {
+    captureFilters: [filter],
+    captureToolResults: true,
+  });
+  const input = JSON.stringify(records[0].payload.parts[0].tool_input);
+  const output = JSON.stringify(records[1].payload.parts[0].tool_output);
+  assert.equal(input.includes("12345"), false, "tool arguments must be redacted");
+  assert.equal(output.includes("12345"), false, "tool output must be redacted");
+  assert.equal(input.includes("Customer [ID]"), true);
+  assert.equal(output.includes("Customer [ID]"), true);
+});
+
+test("leaves tool payloads untouched when no capture filter applies", () => {
+  const events = [
+    {
+      id: "t1",
+      type: "tool.execution_start",
+      timestamp: "2026-10-30T00:00:00Z",
+      data: { toolCallId: "c1", toolName: "shell", arguments: { command: "echo hello" } },
+    },
+  ];
+  const records = normalizeCopilotEvents(events, SESSION);
+  assert.equal(records[0].payload.parts[0].tool_input.command, "echo hello");
+});
+
 test("applies exclusion before tool output capture, not after", () => {
   const records = normalizeCopilotEvents(
     [start("call-1", "jira_search"), complete("call-1")],

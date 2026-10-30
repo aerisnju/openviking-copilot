@@ -13,6 +13,7 @@
     "probe:uninstall": "node scripts/uninstall-probes.mjs",
     "probe:validate": "node scripts/validate-probes.mjs",
     "vendor:openviking": "node scripts/vendor-openviking.mjs",
+    "vendor:status": "node scripts/vendor-status.mjs",
     "test": "node --test"
   },
   "engines": {

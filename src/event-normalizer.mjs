@@ -3,6 +3,10 @@ import {
   shapeCapturePayload,
   truncateCaptureText,
 } from "../vendor/openviking-memory-plugin-shared/lib/capture-utils.mjs";
+import {
+  applyInputFilters,
+  compileInputFilters,
+} from "../vendor/openviking-memory-plugin-shared/lib/input-filters.mjs";
 
 const SECRET_KEY = /(?:authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|credential)/i;
 const PRIVATE_EVENT_TYPES = new Set([
@@ -120,6 +124,34 @@ function makeRecord(event, sourceSessionId, sourceSequence, kind, actor, payload
   return record;
 }
 
+export /**
+ * Apply `captureFilters` substitutions to a structured tool value.
+ *
+ * The shared `filterCaptureParts` now rewrites tool inputs and outputs, but this
+ * adapter builds tool parts itself instead of routing them through that
+ * function, so the same substitution has to happen here. Without it a
+ * `captureFilters` redaction rule would cover conversation text while a secret
+ * that reached a tool argument or its output was stored verbatim — the gap
+ * upstream fixed in #5937.
+ */
+function substituteStructured(value, rules, role, depth = 0) {
+  if (rules.length === 0) return value;
+  if (typeof value === "string") {
+    const result = applyInputFilters(value, rules, { role, substituteOnly: true });
+    return typeof result?.text === "string" ? result.text : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => substituteStructured(item, rules, role, depth + 1));
+  }
+  if (!value || typeof value !== "object" || depth >= 20) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      substituteStructured(item, rules, role, depth + 1),
+    ]),
+  );
+}
+
 export function isExcludedTool(toolName, excluded) {
   if (!Array.isArray(excluded) || excluded.length === 0) return false;
   const name = String(toolName || "");
@@ -208,7 +240,11 @@ function normalizeOne(event, sourceSessionId, sourceSequence, config) {
         tool_id: toolCallId,
         tool_name: toolName,
         tool_status: "running",
-        tool_input: redactSensitive(data.arguments ?? {}),
+        tool_input: substituteStructured(
+          redactSensitive(data.arguments ?? {}),
+          config.captureFilterRules ?? [],
+          "tool",
+        ),
       };
       return makeRecord(
         event,
@@ -230,7 +266,11 @@ function normalizeOne(event, sourceSessionId, sourceSequence, config) {
         tool_status: data.success === false ? "error" : "completed",
       };
       if (config.captureToolResults === true) {
-        payload.tool_output = stringifyToolOutput(data.result ?? "");
+        payload.tool_output = substituteStructured(
+          stringifyToolOutput(data.result ?? ""),
+          config.captureFilterRules ?? [],
+          "tool",
+        );
       }
       return makeRecord(
         event,
@@ -280,6 +320,7 @@ export function normalizeCopilotEvents(events, sourceSessionId, {
   captureToolResults = false,
   excludedTools = [],
   excludedCallIds: excludedCallIdsInput,
+  captureFilterRules: captureFilterRulesInput,
 } = {}) {
   if (
     typeof sourceSessionId !== "string" ||
@@ -299,9 +340,15 @@ export function normalizeCopilotEvents(events, sourceSessionId, {
   // resolved the set (the transcript audit, which sees events one at a time)
   // passes it in.
   const excludedCallIds = excludedCallIdsInput ?? collectExcludedCallIds(events, excludedTools);
+  // Compiled once per batch; tool-part substitutions reuse the same rules the
+  // text parts were filtered with.
+  const captureFilterRules = captureFilterRulesInput
+    ?? compileInputFilters(captureFilters).rules
+    ?? [];
   for (const event of events) {
     const record = normalizeOne(event, sourceSessionId, startSequence + records.length, {
       captureFilters,
+      captureFilterRules,
       captureMaxLength,
       captureToolMaxChars,
       captureToolResults,

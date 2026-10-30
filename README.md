@@ -174,6 +174,7 @@ subsequent commits may proceed past the intentionally omitted sequence.
 
 - [Design overview](docs/design-overview.md)
 - [Known limitations](docs/known-limitations.md)
+- [Upstream dependencies](docs/upstream-dependencies.md)
 - [Release strategy](docs/release-strategy.md)
 - [Copilot host contract](docs/host-contract.md)
 - [Persistence and recovery](docs/persistence-recovery.md)

@@ -17,7 +17,7 @@ vendor/openviking-memory-plugin-shared/
     Derived from the OpenViking project (https://github.com/volcengine/OpenViking),
     licensed under AGPL-3.0.
 
-    The exact source commit (`168037c8d99fec270742ffda6014d65382a0f04a`) and a
+    The exact source commit (`14fa24dc59228c94461a9d331b0727bc5af97349`) and a
     SHA-256 digest for every vendored file are recorded in
     vendor/openviking-memory-plugin-shared/UPSTREAM-MANIFEST.json.
     The upstream license text is retained at
