@@ -503,6 +503,46 @@ remote commit with zero pending tokens. Combined with the earlier `1.0.90` and
 the supported range. Test sessions, peers, local partitions, and the scratch
 workspace were all removed and verified absent.
 
+### Mutating MCP tools against the real server (2026-10-30)
+
+Authorized by the user with a fixed prefix:
+`viking://resources/tmp/ov-copilot-it-`. A baseline listing first confirmed
+`viking://resources` held only `tpi` and no `tmp`, so anything created was
+provably this run's.
+
+| Tool / behaviour | Result |
+|---|---|
+| `write` mode=create | Created `manifest.md` (521 B) and `fixture.md` (21 B) |
+| `write` mode=create on an existing file | Rejected: `ALREADY_EXISTS`, file untouched |
+| `write` into a missing nested path | Created `nested/child.md`, parents auto-created |
+| `write` mode=append | Appended; `read` showed both lines in order |
+| `read` (multiple URIs) | Returned exact content for each |
+| `tree` (depth 3) | 4 entries: `nested/child.md`, `fixture.md`, `manifest.md` |
+| `edit` (exact match) | Replaced the line; `read` confirmed |
+| `edit` (missing `old_string`) | Rejected: `InvalidArgument`, file unchanged |
+| `glob **/*.md` | Found all 3 files |
+| `grep` (two patterns) | Found `maple-orbit-731` in `child.md` and the edited line in `fixture.md` |
+| `forget` (single file) | Deleted; `list` no longer showed it, directory remained |
+| `forget` (recursive directory) | Deleted the run directory |
+| `forget` (no `uri`) | Rejected by schema validation |
+
+Cleanup was verified three ways: `list` on the run directory returned "no
+entries" for `viking://resources/tmp`, `glob` found no files, and after removing
+the `tmp` directory the parent listing was back to exactly `[dir] tpi` — the
+pre-test baseline.
+
+Notes worth keeping:
+
+- Writes report `Indexing: semantic=queued, vector=queued`; the files were
+  immediately readable and `glob`/`grep` found them without waiting, so path-based
+  reads do not depend on the background index.
+- `create` is a real guard: it refuses an existing file instead of overwriting.
+- `edit` fails closed on a stale `old_string`, which is what makes it safe to use
+  against a file that may have changed.
+- `forget` is irreversible and has no confirmation prompt in the tool itself; the
+  safety has to come from the caller's prefix discipline. This is why the
+  authorized prefix was fixed in advance and the baseline was recorded first.
+
 ### Capture write timeout correction (2026-10-23)
 
 An earlier note claimed capture had no per-write timeout of its own. That was
