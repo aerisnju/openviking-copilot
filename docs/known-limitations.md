@@ -257,3 +257,31 @@ signature from freezing a session.
 discard that exact sequence with `--confirm-data-loss`. `diagnostics:copilot
 discard` remains the explicit, single-record form.
 
+
+## K-11: a running session keeps the code it loaded, not the code on disk
+
+**What happens.** After `install:copilot` replaces the extension files, sessions
+that are already running keep executing the modules they loaded at startup. The
+new files are on disk and a fresh session picks them up, but an in-flight session
+still captures with the old logic.
+
+**Why it matters for the WAF rewrite.** The rule list is the thing that grows as
+the edge is characterised. A session started before a rule was added stages
+records the new build would have neutralised, and those records then fail with
+`403` — looking like the fix did not work. This was observed directly: a record
+staged at 13:5x contained a neutralised `printf` substitution (the older rule) and
+a raw `/etc/passwd` (the newer rule), because the process predated the deploy by
+four minutes.
+
+**What makes it self-healing.** Because neutralisation also runs at the send
+boundary (K-10), a record staged under an older rule list is normalised whenever
+it is finally sent — but only by a process that has the new code. `diagnostics
+retry --session <id> --sequence <n>` puts the record back in the pending queue; it
+does not send it, so the flush still comes from whichever process owns that
+session's partition. In practice that means restarting the session is what applies
+a deploy to an in-flight conversation. Verified: a record that failed with `403`
+under the old process returned `200` when replayed through the deployed build.
+
+**How to check.** Compare the deployed file's mtime against the extension
+process's start time. If the process is older, restart the session; the backlog is
+not lost, and the send-boundary rewrite will normalise it on the next flush.
