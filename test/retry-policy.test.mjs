@@ -25,3 +25,32 @@ test("classifies transient, authentication, terminal, and accepted outcomes", ()
   assert.equal(classifyOpenVikingFailure({ ok: true, status: 200 }).category, "accepted");
   assert.equal(classifyOpenVikingFailure(new Error("connection reset")).retryable, true);
 });
+
+test("separates a credential 403 from a content 403", () => {
+  // A credential failure names the auth problem.
+  assert.deepEqual(
+    classifyOpenVikingFailure({ ok: false, status: 403, error: { message: "unauthorized: invalid api key" } }),
+    { category: "authentication", status: 403, retryable: false },
+  );
+  assert.deepEqual(
+    classifyOpenVikingFailure({ ok: false, status: 403, error: { code: "FORBIDDEN_SCOPE" } }),
+    { category: "authentication", status: 403, retryable: false },
+  );
+  // A content rejection does not, so the operator is not sent to rotate a key
+  // that is fine.
+  assert.deepEqual(
+    classifyOpenVikingFailure({ ok: false, status: 403, error: { message: "HTTP 403" } }),
+    { category: "rejected-content", status: 403, retryable: false },
+  );
+  assert.deepEqual(
+    classifyOpenVikingFailure({ ok: false, status: 403 }),
+    { category: "rejected-content", status: 403, retryable: false },
+  );
+});
+
+test("keeps 401 as authentication regardless of message", () => {
+  assert.deepEqual(
+    classifyOpenVikingFailure({ ok: false, status: 401, error: { message: "HTTP 401" } }),
+    { category: "authentication", status: 401, retryable: false },
+  );
+});

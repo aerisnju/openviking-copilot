@@ -188,3 +188,45 @@ one. Nothing is removed without `--apply`.
 of an unarchived conversation if the eligibility test were ever wrong, so removal
 stays an explicit operator action.
 
+## K-10: the server rejects some tool arguments, blocking the queue
+
+**What happens.** OpenViking returns `403` with a bare `HTTP 403` message for a
+payload it refuses. One observed trigger is a tool argument containing shell
+command substitution (`` `date` ``), which the server treats as an injection
+risk. The record is dead-lettered, and because a commit must not cross an unsent
+record, every later record in that session waits behind it.
+
+**Why it cannot be fixed locally.** The decision belongs to the server, and the
+response carries no field saying which token was rejected. The integration cannot
+tell in advance which arguments a server version will refuse.
+
+**What the integration does.** Since 2026-11-16 it distinguishes this from a
+credential failure: a 403 whose message is not auth-shaped is classified
+`rejected-content` instead of `authentication`, so `health` reports a content
+rejection rather than sending the operator to rotate a working key.
+
+**How to clear it.** `diagnostics:copilot export --session <id> --output <file>`
+first, then either retry after the payload is corrected or discard that exact
+sequence with `--confirm-data-loss`. Discarding is irreversible and removes the
+queued conversation data, leaving a digest-only tombstone; the integration never
+does it on its own.
+
+**Related.** `captureFilters` substitutions apply to tool inputs, so a rule can
+rewrite a triggering pattern before it reaches the server — but only for patterns
+you can predict.
+
+**What happens.** Every Copilot session the extension ever touched leaves a
+directory under `~/.openviking/copilot/state/`. Sessions created but never used,
+sessions whose remote counterpart was deleted, and test sessions all leave an
+empty or orphaned directory behind, and nothing cleans them up on its own.
+
+**Mitigation.** `diagnostics:copilot gc` surveys them and reports what is
+eligible; `gc --apply` removes only partitions that hold no queued data **and**
+whose remote session is confirmed gone. An unknown remote counts as present, a
+recently active session is kept, and `--keep <session-id>` protects a specific
+one. Nothing is removed without `--apply`.
+
+**Why it is not automatic.** Deleting a partition destroys the only local record
+of an unarchived conversation if the eligibility test were ever wrong, so removal
+stays an explicit operator action.
+

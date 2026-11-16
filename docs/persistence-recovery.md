@@ -109,6 +109,7 @@ No in-place truncating writes are allowed.
 | HTTP 429 | Retry with bounded backoff; `Retry-After` is not currently exposed by the shared HTTP helper |
 | HTTP 5xx | Retry with bounded backoff |
 | HTTP 401/403 | Stop automatic retries; surface credential error |
+| HTTP 403 on a payload | Distinguish from a credential failure: a 403 whose message is not auth-shaped is classified `rejected-content`, dead-lettered, and reported as content rejection rather than sending the operator to rotate a working key |
 | HTTP 400/404/409/422 | Classify; dead-letter invalid records unless explicitly recoverable |
 | Serialization/schema error | Dead-letter and mark adapter degraded |
 | Local state I/O error | Stop capture for partition and surface high-priority diagnostic |
@@ -116,6 +117,21 @@ No in-place truncating writes are allowed.
 `src/retry-policy.mjs` classifies transport/no-status, 408, 429, 5xx, and
 explicitly retryable 409 as retryable; 401/403 as authentication failures; and
 other non-success HTTP statuses as terminal. The current runtime sends
+
+A 403 is ambiguous on this server: it is returned both for a key without
+permission and for a payload the server refuses. A tool argument containing shell
+command substitution (`` `date` ``) is rejected this way, and the response body
+carries no explanatory message — only `HTTP 403`. Treating every 403 as an
+authentication failure sends the operator to rotate a credential that is fine and
+hides the real cause. `classifyOpenVikingFailure` therefore inspects the error
+message: auth-shaped text keeps the `authentication` category, and anything else
+becomes `rejected-content`, which is terminal for that record but reported as
+content rejection.
+
+Either way the record is dead-lettered and blocks later records, because a
+commit must not cross an unsent record. Resolving it needs an operator decision
+(retry after editing, or discard with `--confirm-data-loss`); the integration
+does not silently drop it. The current runtime sends
 sequentially and applies bounded retry scheduling to retryable failures;
 the local diagnostics CLI can return a selected dead-letter sequence to the
 pending queue with `retry --session <id> --sequence <n>`. This preserves the
