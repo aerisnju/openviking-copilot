@@ -157,7 +157,8 @@ try {
         `OpenViking configuration: ${report.status} (${report.mode})\n`
           + `Server: ${report.server.endpoint} via ${report.server.transport}\n`
           + `Authentication: ${report.server.authMode}; API key configured: ${report.server.apiKeyConfigured} (${report.server.apiKeySource})\n`
-          + `Recall: ${report.behavior.autoRecall ? "on" : "off"}; capture: ${report.behavior.autoCapture ? "on" : "off"}\n`,
+          + `Recall: ${report.behavior.autoRecall ? "on" : "off"}; capture: ${report.behavior.autoCapture ? "on" : "off"}\n`
+          + `Rejected-record policy: ${report.behavior.deadLetterPolicy}\n`,
       );
       for (const issue of report.issues) {
         process.stdout.write(

@@ -646,6 +646,93 @@ test("dead-letters terminal write failures and blocks later records behind the g
   });
 });
 
+test("discards a rejected record and keeps capturing when the policy allows it", async () => {
+  await withRuntime(async ({ store }) => {
+    let messageWrites = 0;
+    const accepted = [];
+    const fetchJSON = async (path, init) => {
+      if (path.includes("?auto_create=true")) {
+        return { ok: true, status: 200, result: { session_id: getOpenVikingSessionId("copilot-native-session") } };
+      }
+      if (path.endsWith("/commit")) return { ok: true, status: 200, result: {} };
+      messageWrites += 1;
+      const body = JSON.parse(init.body);
+      if (body.parts[0].text === "Invalid payload.") {
+        return { ok: false, status: 403, error: { message: "HTTP 403" } };
+      }
+      accepted.push(body.parts[0].text);
+      return { ok: true, status: 200, result: {} };
+    };
+    const runtime = createCopilotMemorySession({
+      copilotSessionId: "copilot-native-session",
+      cwd: tmpdir(),
+      config: { ...config, deadLetterPolicy: "discard" },
+      fetchJSON,
+      store,
+    });
+
+    await runtime.initialize();
+    await runtime.capture(event("user-1", "user.message", "Invalid payload."));
+    await runtime.capture(event("user-2", "user.message", "Must still be delivered."));
+
+    // The rejected record is dropped rather than holding every later turn.
+    assert.deepEqual(accepted, ["Must still be delivered."]);
+    const snapshot = await store.snapshot();
+    assert.equal(snapshot.deadLetterCount, 0);
+    assert.equal(snapshot.discardedCount, 1);
+    assert.equal(snapshot.pendingCount, 0);
+    assert.equal(snapshot.lastAcknowledgedSequence, 1);
+    assert.equal((await runtime.commit()).reason, undefined);
+  });
+});
+
+test("drains an existing dead letter under the discard policy", async () => {
+  await withRuntime(async ({ store }) => {
+    let rejectNext = true;
+    const fetchJSON = async (path) => {
+      if (path.includes("?auto_create=true")) {
+        return { ok: true, status: 200, result: { session_id: getOpenVikingSessionId("copilot-native-session") } };
+      }
+      if (path.endsWith("/commit")) return { ok: true, status: 200, result: {} };
+      if (rejectNext) {
+        rejectNext = false;
+        return { ok: false, status: 422, error: { code: "INVALID_ARGUMENT" } };
+      }
+      return { ok: true, status: 200, result: {} };
+    };
+    const strict = createCopilotMemorySession({
+      copilotSessionId: "copilot-native-session",
+      cwd: tmpdir(),
+      config,
+      fetchJSON,
+      store,
+    });
+    await strict.initialize();
+    await strict.capture(event("user-1", "user.message", "Rejected once."));
+    await strict.capture(event("user-2", "user.message", "Queued behind it."));
+    assert.equal((await store.snapshot()).deadLetterCount, 1);
+
+    // The default policy holds the gap, which is what keeps capture honest.
+    assert.deepEqual(await strict.flush(), { sent: 0, blocked: true, reason: "dead-letter" });
+
+    // Switching to discard must clear the backlog it left, not just new failures.
+    const lenient = createCopilotMemorySession({
+      copilotSessionId: "copilot-native-session",
+      cwd: tmpdir(),
+      config: { ...config, deadLetterPolicy: "discard" },
+      fetchJSON,
+      store,
+    });
+    const result = await lenient.flush();
+    assert.equal(result.blocked, false);
+    assert.equal(result.sent, 1);
+    const snapshot = await store.snapshot();
+    assert.equal(snapshot.deadLetterCount, 0);
+    assert.equal(snapshot.discardedCount, 1);
+    assert.equal(snapshot.pendingCount, 0);
+  });
+});
+
 test("routes enabled subagent events to a peer-preferences-only isolated session", async () => {
   await withRuntime(async ({ store }) => {
     const parentSessionId = "ov-copilot-it-run-12345678";

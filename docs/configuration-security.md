@@ -144,6 +144,24 @@ Before transport, the adapter additionally:
 The adapter does not claim comprehensive secret detection. Users must retain
 control over capture and exclusion policy.
 
+## 6a. Failure policy for rejected records
+
+Capture is ordered: a commit cannot step over an unsent record. That keeps the
+archive complete, but it also means one payload the server permanently refuses
+would stall every later turn in that session. `deadLetterPolicy` decides which
+way that trade goes.
+
+| Policy | Behaviour | Trade-off |
+|---|---|---|
+| `hold` (default) | Keep the record pending; later capture waits behind it | Nothing is lost, but the session needs an operator |
+| `discard` | Write a digest-only tombstone and continue | One message is missing; later turns keep flowing |
+
+Configure it under `plugin` or `plugin.copilot` in `ovcli.conf`, or with
+`OPENVIKING_DEAD_LETTER_POLICY`. `discard` also drains dead letters a session
+already holds, so switching policy unblocks an existing backlog. `doctor` reports
+the resolved value under `behavior.deadLetterPolicy`. Retryable failures are
+unaffected: they are always retried, never discarded.
+
 ## 7. URI guard security
 
 The SDK `onPreToolUse` hook applies the shared URI guard to supported local

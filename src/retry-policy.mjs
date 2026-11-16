@@ -25,6 +25,28 @@ function looksLikeAuthenticationFailure(result) {
   return /unauthor|authentic|forbidden|permission|api[ _-]?key|token|credential|scope|rbac|not allowed/.test(message);
 }
 
+/**
+ * What to do with a record the server will never accept.
+ *
+ * `hold` is the strict reading of "at least once": the record stays pending and
+ * everything behind it waits, so no turn is ever skipped. It is also how a
+ * single rejected message can stall capture for days, because capture is
+ * ordered and the commit cannot step over an unsent record.
+ *
+ * `discard` follows the upstream plugin: write a tombstone, move on. Later turns
+ * keep reaching the server, at the cost of one missing message. `hold` stays the
+ * default because silently dropping memory is the worse surprise; the policy is
+ * configurable so an operator can trade the other way once they have seen a
+ * rejection they cannot fix.
+ */
+export const DEAD_LETTER_POLICIES = Object.freeze(["hold", "discard"]);
+export const DEFAULT_DEAD_LETTER_POLICY = "hold";
+
+export function resolveDeadLetterPolicy(value) {
+  const policy = String(value ?? "").trim().toLowerCase();
+  return DEAD_LETTER_POLICIES.includes(policy) ? policy : DEFAULT_DEAD_LETTER_POLICY;
+}
+
 export function classifyOpenVikingFailure(result) {
   if (!result || typeof result !== "object") {
     return { category: "retryable", status: null, retryable: true };

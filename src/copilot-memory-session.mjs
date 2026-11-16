@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { buildAgentProfile, recallForPrompt } from "../vendor/openviking-memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { applyInputFilters, compileInputFilters } from "../vendor/openviking-memory-plugin-shared/lib/input-filters.mjs";
 import { resolveEffectivePeerId } from "../vendor/openviking-memory-plugin-shared/lib/workspace-peer.mjs";
-import { classifyOpenVikingFailure } from "./retry-policy.mjs";
+import { classifyOpenVikingFailure, resolveDeadLetterPolicy } from "./retry-policy.mjs";
 import { boundRecallContext } from "./context-budget.mjs";
 import { normalizeCopilotEvents, isExcludedTool } from "./event-normalizer.mjs";
 import { DurableSessionStore } from "./durable-session-store.mjs";
@@ -88,6 +88,9 @@ export function createCopilotMemorySession({
   const peerId = resolveEffectivePeerId({ cfg: config, cwd }).peerId;
   const captureFilterErrors = compileInputFilters(config.captureFilters).errors;
   const recallFilters = compileInputFilters(config.recallQueryFilters);
+  const deadLetterPolicy = resolveDeadLetterPolicy(
+    config.deadLetterPolicy ?? process.env.OPENVIKING_DEAD_LETTER_POLICY,
+  );
   if (captureFilterErrors.length > 0) {
     logger("capture-filter-invalid", { count: captureFilterErrors.length });
   }
@@ -273,8 +276,18 @@ export function createCopilotMemorySession({
     if (closed) return { sent: 0, blocked: true, reason: "closed" };
     const snapshot = await sessionStore.snapshot();
     if (snapshot.deadLetterCount > 0) {
-      retryAttempt = 0;
-      return { sent: 0, blocked: true, reason: "dead-letter" };
+      if (deadLetterPolicy !== "discard") {
+        retryAttempt = 0;
+        return { sent: 0, blocked: true, reason: "dead-letter" };
+      }
+      // `discard` means a rejected record must not outlive the decision: drain
+      // the backlog it left behind, otherwise the policy would only apply to
+      // failures observed in this process and an old dead letter would still
+      // stall every later turn.
+      for (const sequence of snapshot.deadLetterSequences) {
+        await sessionStore.discardDeadLetter(sequence);
+        logger("capture-discarded", { sequence, reason: "policy" });
+      }
     }
     const pending = await sessionStore.pendingRecords();
     if (pending.length === 0) {
@@ -312,11 +325,24 @@ export function createCopilotMemorySession({
       const classification = classifyOpenVikingFailure(result);
       if (classification.category !== "accepted") {
         if (!classification.retryable) {
-          await sessionStore.markDeadLetter(record.sourceSequence, {
+          const failure = {
             category: failureCategory(classification),
             status: classification.status,
             message: failureMessage(result),
-          });
+          };
+          if (deadLetterPolicy === "discard") {
+            await sessionStore.markDeadLetter(record.sourceSequence, failure);
+            await sessionStore.discardDeadLetter(record.sourceSequence);
+            logger("capture-discarded", {
+              sequence: record.sourceSequence,
+              status: classification.status,
+              category: failure.category,
+            });
+            sent += 1;
+            retryAttempt = 0;
+            continue;
+          }
+          await sessionStore.markDeadLetter(record.sourceSequence, failure);
         } else {
           logger("capture-deferred", {
             sequence: record.sourceSequence,

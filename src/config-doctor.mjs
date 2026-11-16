@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { buildPluginConfig } from "../vendor/openviking-memory-plugin-shared/lib/plugin-config.mjs";
 import { loadCredentialFiles } from "../vendor/openviking-memory-plugin-shared/lib/credentials.mjs";
 import { describeInputFilters } from "../vendor/openviking-memory-plugin-shared/lib/input-filters.mjs";
+import { resolveDeadLetterPolicy } from "./retry-policy.mjs";
 
 function isLoopback(hostname) {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -145,6 +146,9 @@ export function diagnoseOpenVikingConfig({ cwd = process.cwd(), env = process.en
       recallTimeoutMs: config.recallTimeoutMs,
       captureTimeoutMs: config.captureTimeoutMs,
       captureToolResults: config.captureToolResults,
+      deadLetterPolicy: resolveDeadLetterPolicy(
+        config.deadLetterPolicy ?? env.OPENVIKING_DEAD_LETTER_POLICY,
+      ),
     },
     filters: filters.map(({ key, total, active, errors }) => ({
       key,

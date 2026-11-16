@@ -15,6 +15,7 @@
 | D-009 | Integration server | Cloud server configured by local `ov` CLI | Approved |
 | D-010 | Remote test isolation | Unique guarded Viking prefix and manifest-only cleanup | Approved |
 | D-012 | Release strategy | Independent AGPL-3.0 repository first; focused upstream contribution afterwards | Proposed |
+| D-013 | Permanent-failure policy | `hold` by default, `discard` opt-in, configurable, applies to existing backlogs | Approved |
 
 ## Decision rationale
 
@@ -101,3 +102,30 @@ blocks mutating cloud integration tests.
 
 The design baseline was reviewed and approved on 2026-09-30. Implementation must
 return for review if a Phase 0 host probe invalidates any approved decision.
+
+### D-013: Permanent-failure policy
+
+Capture is ordered, so a commit cannot step over an unsent record. The original
+design read that as "a permanently rejected record blocks the session", which is
+correct for completeness and wrong in practice: one payload the server refused
+stalled a real session for eleven days while every later turn piled up behind it.
+The failure could not be predicted, because the server's rejection rule turned out
+not to be characterisable at all (K-10).
+
+Upstream's plugins never face this because `pending-queue.mjs` discards a
+non-retryable failure and continues. Two properties make that acceptable there and
+made it unacceptable here as a silent default: the record is the only local copy
+of that turn, and a dropped message is invisible unless something records it.
+
+The policy is therefore a setting rather than a hard-coded choice:
+
+- `hold` (default) keeps the record pending and blocks later capture. Nothing is
+  lost; the session needs an operator.
+- `discard` writes a digest-only tombstone and continues, matching upstream. One
+  message is missing and the tombstone says so.
+
+Two details follow from the eleven-day incident rather than from theory. The
+policy applies to a session's existing dead letters, not only to failures observed
+in the current process — otherwise switching policy would leave the backlog
+exactly where it was. And retryable failures are never discarded, so the policy
+only governs records the server will never accept.

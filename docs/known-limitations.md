@@ -188,59 +188,70 @@ one. Nothing is removed without `--apply`.
 of an unarchived conversation if the eligibility test were ever wrong, so removal
 stays an explicit operator action.
 
-## K-10: the server rejects a specific printf substitution, blocking the queue
+## K-10: the server can reject a payload with an uncharacterisable 403
 
 **What happens.** OpenViking returns `403` with a bare `HTTP 403` message for a
-payload it refuses. Isolated probes against one session established one
-deterministic form, and showed the decision is not a single-token rule:
+payload it refuses. The rule could **not** be characterised, and probing produced
+outright contradictions across sessions and over time:
 
 | Payload | Result |
 |---|---|
+| `$(printf '%s' x)` as assistant text | 200 in an early probe, 403 later |
+| the same string as `tool_input` | 403 |
+| the same string as `tool_output` | 403 |
 | `$(printf '` | 403, three times out of three |
-| `$(printf'` (no space), `$(PRINTF '` (upper case) | 403 |
 | `$(printf`, `$(printf "`, `$(echo '`, ``echo `date` `` | 200 |
-| 1 600 characters of plain text | 200 |
-| a 5 312-character tool argument, and the same argument truncated to 500 | 403 / 200 |
+| 32 000 characters of plain text | 200 |
+| a 5 312-character tool argument vs the same truncated to 500 | 403 / 200 |
 
-So a `printf` substitution with a single quote is reliably refused, but length
-interacts with content: a long tool argument was refused even after that
-substitution had been rewritten, while the same argument truncated to 500
-characters passed. **The rule was not fully characterised.** Earlier notes in
-this project claimed backticks, then "content in general", then a stable
-substring; each was contradicted by a later probe, and the table above is what
-reproduced.
+The same input returning 200 and then 403 rules out a content-only rule. What
+reproduced consistently is that a `printf` substitution with a single quote is
+refused; everything else varied. **Treat the trigger as unreliable and
+time-varying, not as a known pattern.** Earlier notes in this project claimed
+backticks, then "content in general", then a stable substring; each was
+contradicted by a later probe.
 
-The record is dead-lettered, and because a commit must not cross an unsent
-record, every later record in that session waits behind it.
+The record is dead-lettered. Under the default `hold` policy a commit must not
+cross an unsent record, so every later record in that session waits behind it —
+this stalled one session's queue for eleven days. The `discard` policy removes
+that failure mode at the cost of one missing message; see below.
 
 **What other OpenViking plugins do.** Checked against the same upstream tree:
 
 - The shared `sanitizeCapturedText` strips injected context blocks, metadata
   fences, and timestamp prefixes — nothing about shell syntax. Feeding
   `$(printf '%s' x)` through the shared `shapeCapturePayload` returns it
-  unchanged, so every official plugin sends this pattern verbatim and would hit
-  the same refusal.
+  unchanged, so every official plugin sends this pattern verbatim and is exposed
+  to the same refusal.
 - Their queues behave differently on a permanent failure: `pending-queue.mjs`
   dequeues a non-retryable failure and increments `skipped`, so one rejected
-  message does not block the rest. Our adapter keeps the record and blocks,
-  because a commit must not cross an unsent record.
+  message does not block the rest.
 
 The design difference is therefore not content handling — the official plugins
-have none — but failure handling: they drop the message, we stall the session.
-Dropping is simpler; stalling is safer for archive completeness but needs the
-operator to intervene.
+have none — but failure handling: they always drop the message, we hold the
+session by default and offer dropping as a policy.
 
-**What this integration does.** It rewrites the confirmed `printf` substitution
-before journaling (`$(printf '` becomes `$(printf [REDACTED]`) in tool arguments,
-tool output, and assistant text. Because the rule is not fully characterised,
-this reduces but does not eliminate the risk: a record can still be refused for a
-reason the probes did not isolate.
+**What this integration does.**
+
+1. It rewrites the one form that reproduced consistently (`$(printf '` becomes
+   `$(printf [REDACTED]`) in tool arguments, tool output, and assistant text.
+   Since the rule is not reliable, this reduces but does not eliminate the risk.
+2. `deadLetterPolicy` decides what happens to a record the server will never
+   accept. `hold` (default) keeps the record and stalls later capture; `discard`
+   writes a digest-only tombstone and continues, matching upstream behaviour.
+   Set it in `ovcli.conf` under `plugin` / `plugin.copilot`, or with
+   `OPENVIKING_DEAD_LETTER_POLICY=discard`. Switching an existing session to
+   `discard` also drains the dead letters it already holds, so the policy applies
+   to the backlog and not only to new failures. `hold` remains the default
+   because silently losing memory is the worse surprise; `discard` is for an
+   operator who has seen a rejection they cannot fix.
 
 **How to clear one that already blocked.** `diagnostics:copilot export --session
 <id> --output <file>` first, then either retry after the payload is corrected or
 discard that exact sequence with `--confirm-data-loss`. Discarding is
 irreversible and removes the queued conversation data, leaving a digest-only
-tombstone; the integration never does it on its own.
+tombstone. `diagnostics:copilot discard` remains the explicit, single-record
+form; the policy is the automatic one.
 
 **Related.** `captureFilters` substitutions apply to tool inputs too, so a user
 rule can additionally rewrite a pattern this neutraliser does not know about. The

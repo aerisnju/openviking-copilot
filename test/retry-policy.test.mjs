@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyOpenVikingFailure } from "../src/retry-policy.mjs";
+import { classifyOpenVikingFailure, resolveDeadLetterPolicy } from "../src/retry-policy.mjs";
 
 test("classifies transient, authentication, terminal, and accepted outcomes", () => {
   assert.deepEqual(classifyOpenVikingFailure({ status: 503 }), {
@@ -54,3 +54,12 @@ test("keeps 401 as authentication regardless of message", () => {
     { category: "authentication", status: 401, retryable: false },
   );
 });
+
+test("resolves the dead-letter policy with a strict default", () => {
+  assert.equal(resolveDeadLetterPolicy(undefined), "hold");
+  assert.equal(resolveDeadLetterPolicy(""), "hold");
+  assert.equal(resolveDeadLetterPolicy("nonsense"), "hold");
+  assert.equal(resolveDeadLetterPolicy("HOLD"), "hold");
+  assert.equal(resolveDeadLetterPolicy(" discard "), "discard");
+});
+
