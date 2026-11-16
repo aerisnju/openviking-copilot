@@ -188,46 +188,53 @@ one. Nothing is removed without `--apply`.
 of an unarchived conversation if the eligibility test were ever wrong, so removal
 stays an explicit operator action.
 
-## K-10: the server rejects some tool arguments, blocking the queue
+## K-10: the server rejects a specific printf substitution, blocking the queue
 
 **What happens.** OpenViking returns `403` with a bare `HTTP 403` message for a
-payload it refuses. The pattern is **not** a simple substring rule, and
-characterising it by minimisation produced contradictory results:
+payload it refuses. Isolated probes against one session established one
+deterministic form, and showed the decision is not a single-token rule:
 
 | Payload | Result |
 |---|---|
-| ``echo `date` `` | 403, ten times out of ten |
-| `echo date` | 200 |
-| `$(printf '` alone | 403 in one session |
-| `$(printf`, `$(printf `, `$(printf)`, `$(printf;` alone | 200 |
-| the exact 8-character window that looked responsible | 200 in isolation |
-| prefixes of one real record | 200 up to 1 141 characters, 403 from 1 142 |
+| `$(printf '` | 403, three times out of three |
+| `$(printf'` (no space), `$(PRINTF '` (upper case) | 403 |
+| `$(printf`, `$(printf "`, `$(echo '`, ``echo `date` `` | 200 |
+| 1 600 characters of plain text | 200 |
+| a 5 312-character tool argument, and the same argument truncated to 500 | 403 / 200 |
 
-Two conclusions are safe:
-
-1. The rejection is **deterministic per payload** — repeating an identical body
-   reproduced the same status every time.
-2. It is **not reducible to one token**: a substring that fails inside a long
-   command succeeds on its own, so the server's decision depends on more than
-   the literal text a bisection can isolate. Content length alone is not the
-   trigger (1 600 characters of plain text passes).
+So a `printf` substitution with a single quote is reliably refused, but length
+interacts with content: a long tool argument was refused even after that
+substitution had been rewritten, while the same argument truncated to 500
+characters passed. **The rule was not fully characterised.** Earlier notes in
+this project claimed backticks, then "content in general", then a stable
+substring; each was contradicted by a later probe, and the table above is what
+reproduced.
 
 The record is dead-lettered, and because a commit must not cross an unsent
 record, every later record in that session waits behind it.
 
-**Why it cannot be fixed locally.** The decision belongs to the server, and the
-response carries no field saying what was rejected. Characterising the rule by
-bisection did not converge, so the integration cannot predict it.
+**What other OpenViking plugins do.** Checked against the same upstream tree:
 
-**What the integration does.** Since 2026-11-16 it distinguishes this from a
-credential failure (a 403 whose message is not auth-shaped is classified
-`rejected-content`), and it neutralises the substitution syntax before a record
-is journaled: backtick substitution becomes `[command: ...]`, and `$(...)`
-becomes `(...)`. This applies to tool arguments, tool output, and assistant text,
-because a plain assistant reply that merely *quotes* the pattern was rejected
-too. The stored record therefore differs from the original command — it is
-readable but not re-runnable verbatim — which is the deliberate trade for not
-dead-lettering a whole session.
+- The shared `sanitizeCapturedText` strips injected context blocks, metadata
+  fences, and timestamp prefixes — nothing about shell syntax. Feeding
+  `$(printf '%s' x)` through the shared `shapeCapturePayload` returns it
+  unchanged, so every official plugin sends this pattern verbatim and would hit
+  the same refusal.
+- Their queues behave differently on a permanent failure: `pending-queue.mjs`
+  dequeues a non-retryable failure and increments `skipped`, so one rejected
+  message does not block the rest. Our adapter keeps the record and blocks,
+  because a commit must not cross an unsent record.
+
+The design difference is therefore not content handling — the official plugins
+have none — but failure handling: they drop the message, we stall the session.
+Dropping is simpler; stalling is safer for archive completeness but needs the
+operator to intervene.
+
+**What this integration does.** It rewrites the confirmed `printf` substitution
+before journaling (`$(printf '` becomes `$(printf [REDACTED]`) in tool arguments,
+tool output, and assistant text. Because the rule is not fully characterised,
+this reduces but does not eliminate the risk: a record can still be refused for a
+reason the probes did not isolate.
 
 **How to clear one that already blocked.** `diagnostics:copilot export --session
 <id> --output <file>` first, then either retry after the payload is corrected or

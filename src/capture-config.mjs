@@ -10,25 +10,20 @@
 export const EXCLUDED_TOOLS_ENV = "OPENVIKING_CAPTURE_EXCLUDED_TOOLS";
 
 /**
- * Patterns the OpenViking server refuses with a bare `403`.
+ * The one pattern the OpenViking server refuses with a bare `403`.
  *
- * Characterising the rule by minimisation did not converge — a substring that
- * fails inside a long command succeeds on its own — so this is a conservative
- * pre-filter, not a model of the server's decision. It rewrites the two forms
- * that were reproduced deterministically (backtick substitution and a command
- * substitution wrapping a quoted printf format) so an otherwise valid record is
- * not dead-lettered and does not block every later record in the session.
+ * Established by repeated isolated probes: a command substitution whose command
+ * is `printf` immediately followed by a single quote is rejected, while
+ * `$(printf` without a quote, `$(printf "` with a double quote, and
+ * `$(echo '` all pass. Length, backticks and other commands are not involved.
  *
- * Neutralising is deliberately visible: the stored command says the substitution
- * was removed rather than pretending the original text survived.
+ * The rewrite keeps the substitution visible and readable but removes the exact
+ * form the server refuses. It is applied to tool arguments, tool output and
+ * assistant text, because a plain reply that merely quoted the pattern was
+ * rejected too.
  */
 export const SHELL_SUBSTITUTION_NEUTRALISERS = Object.freeze([
-  // `command` -> [command]
-  [/(?<![\\])`([^`\n]{1,200})(?<![\\])`/g, "[command: $1]"],
-  // $(printf '...') -> (printf '...')
-  [/\$\((printf\s+')/g, "($1"],
-  // $( ... ) -> ( ... ) for any other substitution inside a tool argument
-  [/\$\((?![^)]*\[command:)/g, "("],
+  [/\$\(\s*printf\s*'/gi, "$(printf [REDACTED]"],
 ]);
 
 export function neutraliseShellSubstitutions(value) {

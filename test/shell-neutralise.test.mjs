@@ -3,24 +3,23 @@ import test from "node:test";
 import { neutraliseShellSubstitutions, neutraliseToolArguments } from "../src/capture-config.mjs";
 import { normalizeCopilotEvents } from "../src/event-normalizer.mjs";
 
-// The server answers 403 to some shell substitution syntax, dead-lettering the
-// record and blocking every later record in the session. Characterising the rule
-// by minimisation did not converge, so these are conservative rewrites of the
-// forms that reproduced deterministically.
-test("rewrites backtick substitution into a readable placeholder", () => {
-  assert.equal(neutraliseShellSubstitutions("echo `date`"), "echo [command: date]");
-  assert.equal(neutraliseShellSubstitutions("a `ls -l` b"), "a [command: ls -l] b");
+// The server answers 403 to one specific form: a command substitution whose
+// command is printf followed by a single quote. These cases mirror the probes
+// that established the rule, so a change here changes what we send.
+test("rewrites the rejected printf substitution", () => {
+  assert.equal(neutraliseShellSubstitutions("$(printf '%s' x)"), "$(printf [REDACTED]%s' x)");
+  assert.equal(neutraliseShellSubstitutions("$(printf '"), "$(printf [REDACTED]");
 });
 
-test("rewrites a command substitution wrapping printf", () => {
-  assert.equal(
-    neutraliseShellSubstitutions("m=$(printf '%s' x)"),
-    "m=(printf '%s' x)",
-  );
+test("rewrites the no-space and upper-case spellings that also fail", () => {
+  assert.equal(neutraliseShellSubstitutions("$(printf'"), "$(printf [REDACTED]");
+  assert.equal(neutraliseShellSubstitutions("$(PRINTF '"), "$(printf [REDACTED]");
 });
 
-test("rewrites other command substitutions", () => {
-  assert.equal(neutraliseShellSubstitutions("echo $(whoami)"), "echo (whoami)");
+test("leaves forms the server accepts untouched", () => {
+  for (const accepted of ["$(printf", '$(printf "', "$(echo '", "echo `date`", "printf '%s' x"]) {
+    assert.equal(neutraliseShellSubstitutions(accepted), accepted, `must not rewrite: ${accepted}`);
+  }
 });
 
 test("leaves ordinary text untouched", () => {
@@ -30,17 +29,13 @@ test("leaves ordinary text untouched", () => {
   assert.equal(neutraliseShellSubstitutions(undefined), undefined);
 });
 
-test("does not rewrite an escaped backtick", () => {
-  assert.equal(neutraliseShellSubstitutions("echo \\`x\\`"), "echo \\`x\\`");
-});
-
 test("walks nested argument trees", () => {
   const out = neutraliseToolArguments({
-    command: "echo `date`",
-    nested: { list: ["$(printf '%s')", "plain"] },
+    command: "$(printf '%s' x)",
+    nested: { list: ["$(printf 'a')", "plain"] },
   });
-  assert.equal(out.command, "echo [command: date]");
-  assert.equal(out.nested.list[0], "(printf '%s')");
+  assert.equal(out.command, "$(printf [REDACTED]%s' x)");
+  assert.equal(out.nested.list[0], "$(printf [REDACTED]a')");
   assert.equal(out.nested.list[1], "plain");
 });
 
@@ -49,14 +44,19 @@ test("applies to captured tool arguments before they are journaled", () => {
     id: "t1",
     type: "tool.execution_start",
     timestamp: "2026-11-16T00:00:00Z",
-    data: {
-      toolCallId: "c1",
-      toolName: "powershell",
-      arguments: { command: "echo `date`; m=$(printf '%s' x)" },
-    },
+    data: { toolCallId: "c1", toolName: "powershell", arguments: { command: "m=$(printf '%s' x)" } },
   }];
   const [record] = normalizeCopilotEvents(events, "session-neutralise");
-  const command = record.payload.parts[0].tool_input.command;
-  assert.equal(command.includes("`"), false, "no backtick may reach the server");
-  assert.equal(command, "echo [command: date]; m=(printf '%s' x)");
+  assert.equal(record.payload.parts[0].tool_input.command, "m=$(printf [REDACTED]%s' x)");
+});
+
+test("applies to assistant text, because a quoted pattern was rejected too", () => {
+  const events = [{
+    id: "m1",
+    type: "assistant.message",
+    timestamp: "2026-11-16T00:00:00Z",
+    data: { content: "the pattern is $(printf '", messageId: "m1" },
+  }];
+  const [record] = normalizeCopilotEvents(events, "session-neutralise");
+  assert.equal(record.payload.parts[0].text, "the pattern is $(printf [REDACTED]");
 });
