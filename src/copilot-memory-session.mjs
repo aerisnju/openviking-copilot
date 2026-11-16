@@ -5,6 +5,7 @@ import { resolveEffectivePeerId } from "../vendor/openviking-memory-plugin-share
 import { classifyOpenVikingFailure, resolveDeadLetterPolicy } from "./retry-policy.mjs";
 import { boundRecallContext } from "./context-budget.mjs";
 import { normalizeCopilotEvents, isExcludedTool } from "./event-normalizer.mjs";
+import { neutraliseShellSubstitutions } from "./capture-config.mjs";
 import { DurableSessionStore } from "./durable-session-store.mjs";
 import {
   createSubagentMemoryManager,
@@ -32,6 +33,26 @@ export function getOpenVikingSessionId(copilotSessionId) {
   return `copilot-${createHash("sha256").update(copilotSessionId).digest("hex").slice(0, 40)}`;
 }
 
+/**
+ * Rewrite the WAF-blocked shapes in every string of one message part.
+ *
+ * The edge inspects the whole body rather than named fields, so this walks the
+ * part generically instead of enumerating `text` / `tool_input` / `tool_output`.
+ * A part with no strings comes back structurally identical.
+ */
+function neutralisePart(part) {
+  if (!part || typeof part !== "object") return part;
+  const walk = (value, depth) => {
+    if (typeof value === "string") return neutraliseShellSubstitutions(value);
+    if (Array.isArray(value)) return value.map((item) => walk(item, depth + 1));
+    if (!value || typeof value !== "object" || depth >= 20) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, walk(item, depth + 1)]),
+    );
+  };
+  return walk(part, 0);
+}
+
 function messageForRecord(record, peerId) {
   const payload = record.payload || {};
   const role = record.actor === "user" ? "user" : "assistant";
@@ -48,12 +69,17 @@ function messageForRecord(record, peerId) {
     : [{ type: "text", text: payload.lifecycleEvent || "Turn boundary" }];
   const message = {
     role,
-    parts,
+    // Neutralise at the send boundary, not only on the way into the journal.
+    // A record staged by an older build — or by a build whose rule list was
+    // shorter — carries the raw shape, and retrying it would fail forever.
+    // Normalising here means every record, however it was staged, is sent in a
+    // form the edge accepts.
+    parts: parts.map((part) => neutralisePart(part)),
     created_at: record.occurredAt || new Date().toISOString(),
     message_kind: messageKind,
     source_message_ids: [record.sourceEventId],
   };
-  if (payload.turnId) message.turn_id = payload.turnId;
+  if (payload.turnId) message.turn_id = neutraliseShellSubstitutions(String(payload.turnId));
   if (peerId) message.peer_id = peerId;
   return message;
 }
@@ -451,7 +477,11 @@ export function createCopilotMemorySession({
         const recalled = await recallForPrompt(
           fetchJSON,
           config,
-          filteredPrompt.text,
+          // The WAF inspects the whole body, so a prompt that happens to contain
+          // `/etc/passwd` or `$(printf '` fails recall as well as capture. The
+          // rewrite only touches those exact shapes and is applied to the copy
+          // sent to the server; the local prompt is untouched.
+          neutraliseShellSubstitutions(filteredPrompt.text),
           cwd,
           logger,
           { sessionId: openVikingSessionId },

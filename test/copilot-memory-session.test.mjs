@@ -825,3 +825,73 @@ test("routes enabled subagent events to a peer-preferences-only isolated session
     await runtime.close();
   });
 });
+
+test("neutralises a blocked recall query before it reaches the server", async () => {
+  await withRuntime(async ({ store }) => {
+    const requests = [];
+    const fetchJSON = async (path, init = {}) => {
+      requests.push({ path, init });
+      return { ok: true, status: 200, result: { items: [] } };
+    };
+    const runtime = createCopilotMemorySession({
+      copilotSessionId: "copilot-native-session",
+      cwd: tmpdir(),
+      config: { ...config, autoRecall: true },
+      fetchJSON,
+      store,
+    });
+
+    // The WAF inspects the request body, so a prompt quoting this path would
+    // otherwise fail recall entirely.
+    await runtime.recall("why is /etc/passwd unreadable?");
+    const search = requests.find(({ path }) => path === "/api/v1/search/search");
+    assert.ok(search);
+    assert.equal(JSON.parse(search.init.body).query, "why is /etc/[REDACTED]/passwd unreadable?");
+    await runtime.close();
+  });
+});
+
+test("neutralises at the send boundary so a record staged by an older build can be replayed", async () => {
+  await withRuntime(async ({ store }) => {
+    const sent = [];
+    const fetchJSON = async (path, init) => {
+      if (path.includes("?auto_create=true")) {
+        return { ok: true, status: 200, result: { session_id: getOpenVikingSessionId("copilot-native-session") } };
+      }
+      if (path.endsWith("/commit")) return { ok: true, status: 200, result: {} };
+      sent.push(JSON.parse(init.body));
+      return { ok: true, status: 200, result: {} };
+    };
+
+    // Build a well-formed record, then restore the raw shapes a journal written
+    // by a build with a shorter rule list would carry: nothing neutralised them
+    // on the way in.
+    const [record] = normalizeCopilotEvents([{
+      id: "legacy-tool",
+      type: "tool.execution_start",
+      timestamp: "2026-11-16T00:00:00Z",
+      data: { toolCallId: "c1", toolName: "powershell", arguments: { command: "placeholder" } },
+    }], "copilot-native-session");
+    record.payload.parts[0].tool_input = { command: "Get-Content /etc/passwd", nested: { p: "/etc/shadow" } };
+    record.payload.parts[0].tool_output = "/windows/win.ini";
+    await store.initialize();
+    await store.stage(record);
+
+    const runtime = createCopilotMemorySession({
+      copilotSessionId: "copilot-native-session",
+      cwd: tmpdir(),
+      config,
+      fetchJSON,
+      store,
+    });
+    await runtime.initialize();
+    await runtime.flush();
+
+    assert.equal(sent.length, 1);
+    const part = sent[0].parts[0];
+    assert.equal(part.tool_input.command, "Get-Content /etc/[REDACTED]/passwd");
+    assert.equal(part.tool_input.nested.p, "/etc/[REDACTED]/shadow");
+    assert.equal(part.tool_output, "/windows/[REDACTED]/win.ini");
+    assert.equal((await store.snapshot()).pendingCount, 0);
+  });
+});

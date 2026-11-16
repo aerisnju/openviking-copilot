@@ -188,88 +188,72 @@ one. Nothing is removed without `--apply`.
 of an unarchived conversation if the eligibility test were ever wrong, so removal
 stays an explicit operator action.
 
-## K-10: the server can reject a payload with an uncharacterisable 403
+## K-10: an edge WAF in front of the API rejects command-injection and file-inclusion payloads
 
-**What happens.** OpenViking returns `403` with a bare `HTTP 403` message for a
-payload it refuses. The rule could **not** be characterised, and probing produced
-outright contradictions across sessions and over time:
+**What happens.** A capture or recall request comes back `403` with an empty body.
+The record is dead-lettered, and under the default `hold` policy a commit cannot
+step over an unsent record, so every later turn in that session waits behind it.
+In one session this stalled the queue for eleven days.
 
-| Payload | Result |
+**The 403 is not produced by OpenViking.** Three observations settle it:
+
+| Observation | Result |
 |---|---|
-| `$(printf '%s' x)` as assistant text | 200 in an early probe, 403 later |
-| the same string as `tool_input` | 403 |
-| the same string as `tool_output` | 403 |
-| `$(printf '` | 403, three times out of three |
-| `$(printf`, `$(printf "`, `$(echo '`, ``echo `date` `` | 200 |
-| 32 000 characters of plain text | 200 |
-| a 5 312-character tool argument vs the same truncated to 500 | 403 / 200 |
+| Response body, `content-type`, trace id on a 403 | all empty/absent |
+| The same three fields on any OpenViking response, success or error | JSON envelope plus a trace id |
+| Invalid API key + clean body | `401` |
+| Invalid API key + blocked body | `403` — blocks before authentication |
+| Unknown path + clean body | `404` |
+| Unknown path + blocked body | `403` — blocks before routing |
 
-The same input returning 200 and then 403 rules out a content-only rule. What
-reproduced consistently is that a `printf` substitution with a single quote is
-refused; everything else varied. **Treat the trigger as unreliable and
-time-varying, not as a known pattern.** Earlier notes in this project claimed
-backticks, then "content in general", then a stable substring; each was
-contradicted by a later probe.
+A rejection that happens before authentication and before routing, and that
+carries none of the application's response framing, is made by the network edge
+in front of the API. `openviking/server/error_mapping.py` maps
+`PermissionDeniedError` to 403 *with* a `PERMISSION_DENIED` envelope, so an
+application-level 403 would have looked different.
 
-The record is dead-lettered. Under the default `hold` policy a commit must not
-cross an unsent record, so every later record in that session waits behind it —
-this stalled one session's queue for eleven days. The `discard` policy removes
-that failure mode at the cost of one missing message; see below.
+**The rules.** Three signatures reproduce, all case-insensitive, all matched
+anywhere in the request body or query string — the WAF does not distinguish
+fields, so `turn_id`, `source_message_ids`, tool arguments and tool output are all
+inspected:
 
-**What other OpenViking plugins do.** Checked against the same upstream tree:
+1. `$(` + optional whitespace + `printf` + whitespace + `'` — command injection
+2. `etc` + `/`, `\` or `.` + `passwd` / `shadow` — local file inclusion
+3. `windows` + `/`, `\` or `.` + `win.ini` — local file inclusion
 
-- The shared `sanitizeCapturedText` strips injected context blocks, metadata
-  fences, and timestamp prefixes — nothing about shell syntax. Feeding
-  `$(printf '%s' x)` through the shared `shapeCapturePayload` returns it
-  unchanged, so every official plugin sends this pattern verbatim and is exposed
-  to the same refusal.
-- Their queues behave differently on a permanent failure: `pending-queue.mjs`
-  dequeues a non-retryable failure and increments `skipped`, so one rejected
-  message does not block the rest.
+What does **not** trigger, despite looking like it should: `$(echo 'x')`, `$(ls)`,
+`$(id)`, `$(whoami)`, `$(rm -rf /)`, `$(curl …)`, backticks, `${IFS}`,
+`/etc/hosts`, `/etc/sudoers`, `/etc/group`, `/proc/self/environ`,
+`/root/.ssh/id_rsa`, `../` on its own, and the bare words `passwd` / `shadow` /
+`win.ini`. The `/etc/foo/passwd` shape passes, so rule 2 requires `etc` directly
+adjacent to the separator. `win.ini` matches without a leading slash; `passwd`
+does not.
 
-The design difference is therefore not content handling — the official plugins
-have none — but failure handling: they always drop the message, we hold the
-session by default and offer dropping as a policy.
+Earlier notes in this project blamed backticks, then "content in general", then a
+stable substring. Each was an artifact of testing one variable at a time; the
+table above is what the field-by-field probes established.
 
 **What this integration does.**
 
-1. It rewrites the one form that reproduced consistently (`$(printf '` becomes
-   `$(printf [REDACTED]`) in tool arguments, tool output, and assistant text.
-   Since the rule is not reliable, this reduces but does not eliminate the risk.
-2. `deadLetterPolicy` decides what happens to a record the server will never
-   accept. `hold` (default) keeps the record and stalls later capture; `discard`
-   writes a digest-only tombstone and continues, matching upstream behaviour.
-   Set it in `ovcli.conf` under `plugin` / `plugin.copilot`, or with
-   `OPENVIKING_DEAD_LETTER_POLICY=discard`. Switching an existing session to
-   `discard` also drains the dead letters it already holds, so the policy applies
-   to the backlog and not only to new failures. `hold` remains the default
-   because silently losing memory is the worse surprise; `discard` is for an
-   operator who has seen a rejection they cannot fix.
+1. `WAF_NEUTRALISERS` rewrites those three shapes in every string of the request
+   body — text parts, tool arguments, tool output, and the recall query. The
+   rewrite keeps the text readable (`/etc/passwd` becomes `/etc/[REDACTED]/passwd`)
+   and is verified against the live edge for all 27 blocked forms and all 19
+   accepted look-alikes.
+2. `deadLetterPolicy` covers what the rewrite cannot: `hold` (default) keeps the
+   record and stalls later capture; `discard` writes a digest-only tombstone and
+   continues. `discard` also drains dead letters a session already holds. See
+   `docs/configuration-security.md` §6a.
+3. Retryable failures are never discarded, so the policy only governs records the
+   server will never accept.
+
+**Why the rewrite is not a guarantee.** The edge rule set is not ours to version,
+and a WAF update can add signatures we do not know. The neutraliser reduces the
+observed surface; `deadLetterPolicy` is the backstop that keeps an unknown
+signature from freezing a session.
 
 **How to clear one that already blocked.** `diagnostics:copilot export --session
 <id> --output <file>` first, then either retry after the payload is corrected or
-discard that exact sequence with `--confirm-data-loss`. Discarding is
-irreversible and removes the queued conversation data, leaving a digest-only
-tombstone. `diagnostics:copilot discard` remains the explicit, single-record
-form; the policy is the automatic one.
-
-**Related.** `captureFilters` substitutions apply to tool inputs too, so a user
-rule can additionally rewrite a pattern this neutraliser does not know about. The
-built-in neutraliser covers the forms reproduced so far; a novel pattern would
-still dead-letter.
-
-**What happens.** Every Copilot session the extension ever touched leaves a
-directory under `~/.openviking/copilot/state/`. Sessions created but never used,
-sessions whose remote counterpart was deleted, and test sessions all leave an
-empty or orphaned directory behind, and nothing cleans them up on its own.
-
-**Mitigation.** `diagnostics:copilot gc` surveys them and reports what is
-eligible; `gc --apply` removes only partitions that hold no queued data **and**
-whose remote session is confirmed gone. An unknown remote counts as present, a
-recently active session is kept, and `--keep <session-id>` protects a specific
-one. Nothing is removed without `--apply`.
-
-**Why it is not automatic.** Deleting a partition destroys the only local record
-of an unarchived conversation if the eligibility test were ever wrong, so removal
-stays an explicit operator action.
+discard that exact sequence with `--confirm-data-loss`. `diagnostics:copilot
+discard` remains the explicit, single-record form.
 

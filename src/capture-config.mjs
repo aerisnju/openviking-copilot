@@ -10,26 +10,50 @@
 export const EXCLUDED_TOOLS_ENV = "OPENVIKING_CAPTURE_EXCLUDED_TOOLS";
 
 /**
- * The one pattern the OpenViking server refuses with a bare `403`.
+ * Rewrites for the payloads an edge WAF rejects before OpenViking sees them.
  *
- * Established by repeated isolated probes: a command substitution whose command
- * is `printf` immediately followed by a single quote is rejected, while
- * `$(printf` without a quote, `$(printf "` with a double quote, and
- * `$(echo '` all pass. Length, backticks and other commands are not involved.
+ * The `403` is **not** produced by OpenViking. A rejected request has no body,
+ * no `content-type` and no trace id, while every OpenViking response — success
+ * or error — carries a trace id and a JSON envelope. The block also happens
+ * before authentication (a bad key plus a blocked body returns 403, the same key
+ * with a clean body returns 401) and before routing (an unknown path plus a
+ * blocked body returns 403, the same path clean returns 404). That places it in
+ * the network edge in front of the API, not in `openviking/server`.
  *
- * The rewrite keeps the substitution visible and readable but removes the exact
- * form the server refuses. It is applied to tool arguments, tool output and
- * assistant text, because a plain reply that merely quoted the pattern was
- * rejected too.
+ * Three rules reproduce, all case-insensitive and all matched anywhere in the
+ * request body or query string:
+ *
+ *   1. `$(` + optional space + `printf` + space + `'`  — command injection
+ *   2. `etc` + separators + `passwd` / `shadow`        — local file inclusion
+ *   3. `windows` + separators + `win.ini`              — local file inclusion
+ *
+ * Everything else that looked like a trigger was noise: `$(echo 'x')`, `$(ls)`,
+ * `$(id)`, backticks, `${IFS}`, `/etc/hosts`, `/etc/sudoers`, `../` on its own,
+ * and the bare words `passwd` / `shadow` all pass. Earlier notes in this project
+ * blamed backticks, then "content in general", then a stable substring; the
+ * probes above are what settled it.
+ *
+ * The rewrites keep the text readable but remove the exact shape the WAF matches.
+ * They are applied to every string in the request body, because the WAF does not
+ * distinguish fields: `turn_id`, `source_message_ids`, tool arguments and tool
+ * output are all inspected.
  */
-export const SHELL_SUBSTITUTION_NEUTRALISERS = Object.freeze([
+export const WAF_NEUTRALISERS = Object.freeze([
   [/\$\(\s*printf\s*'/gi, "$(printf [REDACTED]"],
+  [/\betc[/\\.]+(passwd|shadow)/gi, "etc/[REDACTED]/$1"],
+  [/\bwindows[/\\.]+win\.ini/gi, "windows/[REDACTED]/win.ini"],
 ]);
+
+/**
+ * @deprecated Name kept so existing imports and tests keep working; the list is
+ * no longer about shell substitution only.
+ */
+export const SHELL_SUBSTITUTION_NEUTRALISERS = WAF_NEUTRALISERS;
 
 export function neutraliseShellSubstitutions(value) {
   if (typeof value !== "string" || value.length === 0) return value;
   let out = value;
-  for (const [pattern, replacement] of SHELL_SUBSTITUTION_NEUTRALISERS) {
+  for (const [pattern, replacement] of WAF_NEUTRALISERS) {
     out = out.replace(pattern, replacement);
   }
   return out;
