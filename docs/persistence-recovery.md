@@ -119,14 +119,15 @@ explicitly retryable 409 as retryable; 401/403 as authentication failures; and
 other non-success HTTP statuses as terminal. The current runtime sends
 
 A 403 is ambiguous on this server: it is returned both for a key without
-permission and for a payload the server refuses. A tool argument containing shell
-command substitution (`` `date` ``) is rejected this way, and the response body
-carries no explanatory message — only `HTTP 403`. Treating every 403 as an
-authentication failure sends the operator to rotate a credential that is fine and
-hides the real cause. `classifyOpenVikingFailure` therefore inspects the error
-message: auth-shaped text keeps the `authentication` category, and anything else
-becomes `rejected-content`, which is terminal for that record but reported as
-content rejection.
+permission and for a payload the server refuses. A tool argument containing a
+shell command substitution that wraps `printf` with a quoted format string
+(`$(printf '`) is rejected this way, and the response body carries no explanatory
+message — only `HTTP 403`. Treating every 403 as an authentication failure sends
+the operator to rotate a credential that is fine and hides the real cause.
+`classifyOpenVikingFailure` therefore inspects the error message: auth-shaped text
+keeps the `authentication` category, and anything else becomes
+`rejected-content`, which is terminal for that record but reported as content
+rejection.
 
 Either way the record is dead-lettered and blocks later records, because a
 commit must not cross an unsent record. Resolving it needs an operator decision

@@ -191,29 +191,54 @@ stays an explicit operator action.
 ## K-10: the server rejects some tool arguments, blocking the queue
 
 **What happens.** OpenViking returns `403` with a bare `HTTP 403` message for a
-payload it refuses. One observed trigger is a tool argument containing shell
-command substitution (`` `date` ``), which the server treats as an injection
-risk. The record is dead-lettered, and because a commit must not cross an unsent
+payload it refuses. The pattern is **not** a simple substring rule, and
+characterising it by minimisation produced contradictory results:
+
+| Payload | Result |
+|---|---|
+| ``echo `date` `` | 403, ten times out of ten |
+| `echo date` | 200 |
+| `$(printf '` alone | 403 in one session |
+| `$(printf`, `$(printf `, `$(printf)`, `$(printf;` alone | 200 |
+| the exact 8-character window that looked responsible | 200 in isolation |
+| prefixes of one real record | 200 up to 1 141 characters, 403 from 1 142 |
+
+Two conclusions are safe:
+
+1. The rejection is **deterministic per payload** — repeating an identical body
+   reproduced the same status every time.
+2. It is **not reducible to one token**: a substring that fails inside a long
+   command succeeds on its own, so the server's decision depends on more than
+   the literal text a bisection can isolate. Content length alone is not the
+   trigger (1 600 characters of plain text passes).
+
+The record is dead-lettered, and because a commit must not cross an unsent
 record, every later record in that session waits behind it.
 
 **Why it cannot be fixed locally.** The decision belongs to the server, and the
-response carries no field saying which token was rejected. The integration cannot
-tell in advance which arguments a server version will refuse.
+response carries no field saying what was rejected. Characterising the rule by
+bisection did not converge, so the integration cannot predict it.
 
 **What the integration does.** Since 2026-11-16 it distinguishes this from a
-credential failure: a 403 whose message is not auth-shaped is classified
-`rejected-content` instead of `authentication`, so `health` reports a content
-rejection rather than sending the operator to rotate a working key.
+credential failure (a 403 whose message is not auth-shaped is classified
+`rejected-content`), and it neutralises the substitution syntax before a record
+is journaled: backtick substitution becomes `[command: ...]`, and `$(...)`
+becomes `(...)`. This applies to tool arguments, tool output, and assistant text,
+because a plain assistant reply that merely *quotes* the pattern was rejected
+too. The stored record therefore differs from the original command — it is
+readable but not re-runnable verbatim — which is the deliberate trade for not
+dead-lettering a whole session.
 
-**How to clear it.** `diagnostics:copilot export --session <id> --output <file>`
-first, then either retry after the payload is corrected or discard that exact
-sequence with `--confirm-data-loss`. Discarding is irreversible and removes the
-queued conversation data, leaving a digest-only tombstone; the integration never
-does it on its own.
+**How to clear one that already blocked.** `diagnostics:copilot export --session
+<id> --output <file>` first, then either retry after the payload is corrected or
+discard that exact sequence with `--confirm-data-loss`. Discarding is
+irreversible and removes the queued conversation data, leaving a digest-only
+tombstone; the integration never does it on its own.
 
-**Related.** `captureFilters` substitutions apply to tool inputs, so a rule can
-rewrite a triggering pattern before it reaches the server — but only for patterns
-you can predict.
+**Related.** `captureFilters` substitutions apply to tool inputs too, so a user
+rule can additionally rewrite a pattern this neutraliser does not know about. The
+built-in neutraliser covers the forms reproduced so far; a novel pattern would
+still dead-letter.
 
 **What happens.** Every Copilot session the extension ever touched leaves a
 directory under `~/.openviking/copilot/state/`. Sessions created but never used,

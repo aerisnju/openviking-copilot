@@ -7,6 +7,7 @@ import {
   applyInputFilters,
   compileInputFilters,
 } from "../vendor/openviking-memory-plugin-shared/lib/input-filters.mjs";
+import { neutraliseShellSubstitutions, neutraliseToolArguments } from "./capture-config.mjs";
 
 const SECRET_KEY = /(?:authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|credential)/i;
 const PRIVATE_EVENT_TYPES = new Set([
@@ -97,7 +98,7 @@ function contentParts(content, role, config) {
   if (shaped.dropped) return [];
   return shaped.parts
     .filter((part) => part?.type === "text" && typeof part.text === "string")
-    .map((part) => ({ type: "text", text: redactText(part.text) }))
+    .map((part) => ({ type: "text", text: neutraliseShellSubstitutions(redactText(part.text)) }))
     .filter((part) => part.text.length > 0);
 }
 
@@ -241,7 +242,7 @@ function normalizeOne(event, sourceSessionId, sourceSequence, config) {
         tool_name: toolName,
         tool_status: "running",
         tool_input: substituteStructured(
-          redactSensitive(data.arguments ?? {}),
+          redactSensitive(neutraliseToolArguments(data.arguments ?? {})),
           config.captureFilterRules ?? [],
           "tool",
         ),
@@ -267,7 +268,7 @@ function normalizeOne(event, sourceSessionId, sourceSequence, config) {
       };
       if (config.captureToolResults === true) {
         payload.tool_output = substituteStructured(
-          stringifyToolOutput(data.result ?? ""),
+          neutraliseToolArguments(stringifyToolOutput(data.result ?? "")),
           config.captureFilterRules ?? [],
           "tool",
         );
